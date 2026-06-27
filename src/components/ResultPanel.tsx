@@ -1,9 +1,11 @@
 import type { Matrix } from '../lib/cannon'
 
 interface ResultPanelProps {
-  /** C as accumulated in the current snapshot (null = no product yet). */
+  /** Current Cannon C assembled to N×N; null where the block isn't computed yet. */
   currentC: (number | null)[][]
   naiveC: Matrix
+  /** Block size, for drawing block separators. */
+  b: number
   isCorrect: boolean
   isFinalStep: boolean
   compact: boolean
@@ -11,36 +13,46 @@ interface ResultPanelProps {
 
 function CGrid({
   cells,
-  n,
+  b,
   compact,
   highlightDone,
 }: {
   cells: (number | null)[][]
-  n: number
+  b: number
   compact: boolean
   highlightDone: boolean
 }) {
-  const size = compact ? 'h-7 w-7 text-xs' : 'h-10 w-10 text-sm'
+  const n = cells.length
+  const size = compact ? 'h-6 w-6 text-[10px]' : 'h-9 w-9 text-sm'
   return (
     <div
-      className="grid gap-1"
+      className="grid gap-px rounded bg-slate-300/50 p-px dark:bg-slate-600/50"
       style={{ gridTemplateColumns: `repeat(${n}, minmax(0, 1fr))` }}
     >
       {cells.flatMap((row, i) =>
-        row.map((v, j) => (
-          <div
-            key={`${i}-${j}`}
-            className={`flex items-center justify-center rounded-md border font-mono tabular-nums ${size} ${
-              v === null
-                ? 'border-slate-200 bg-slate-50 text-slate-300 dark:border-slate-700 dark:bg-slate-800/30 dark:text-slate-600'
-                : highlightDone
-                  ? 'border-emerald-400/70 bg-emerald-50 text-emerald-700 dark:border-emerald-500/40 dark:bg-emerald-500/10 dark:text-emerald-300'
-                  : 'border-slate-300 bg-white text-slate-800 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100'
-            }`}
-          >
-            {v === null ? '·' : v}
-          </div>
-        )),
+        row.map((v, j) => {
+          // Thicker separators on block boundaries.
+          const blockEdge = [
+            i % b === 0 ? 'border-t-2' : '',
+            j % b === 0 ? 'border-l-2' : '',
+            (i + 1) % b === 0 ? 'border-b-2' : '',
+            (j + 1) % b === 0 ? 'border-r-2' : '',
+          ].join(' ')
+          return (
+            <div
+              key={`${i}-${j}`}
+              className={`flex items-center justify-center border-slate-400/70 font-mono tabular-nums dark:border-slate-500/70 ${blockEdge} ${size} ${
+                v === null
+                  ? 'bg-slate-50 text-slate-300 dark:bg-slate-800/40 dark:text-slate-600'
+                  : highlightDone
+                    ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300'
+                    : 'bg-white text-slate-800 dark:bg-slate-800 dark:text-slate-100'
+              }`}
+            >
+              {v === null ? '·' : v}
+            </div>
+          )
+        }),
       )}
     </div>
   )
@@ -49,12 +61,11 @@ function CGrid({
 export function ResultPanel({
   currentC,
   naiveC,
+  b,
   isCorrect,
   isFinalStep,
   compact,
 }: ResultPanelProps) {
-  const n = naiveC.length
-
   return (
     <div className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white/70 p-4 dark:border-slate-700 dark:bg-slate-800/50">
       <div className="flex items-center justify-between">
@@ -78,26 +89,21 @@ export function ResultPanel({
           <span className="text-[11px] font-medium uppercase tracking-wide text-slate-400">
             Кэннон {isFinalStep ? '(готово)' : '(формируется)'}
           </span>
-          <CGrid cells={currentC} n={n} compact={compact} highlightDone={isFinalStep} />
+          <CGrid cells={currentC} b={b} compact={compact} highlightDone={isFinalStep} />
         </div>
 
         <div className="flex flex-col gap-1.5">
           <span className="text-[11px] font-medium uppercase tracking-wide text-slate-400">
             Наивная проверка (A·B)
           </span>
-          <CGrid
-            cells={naiveC}
-            n={n}
-            compact={compact}
-            highlightDone={false}
-          />
+          <CGrid cells={naiveC} b={b} compact={compact} highlightDone={false} />
         </div>
       </div>
 
       <p className="text-[11px] leading-tight text-slate-400 dark:text-slate-500">
-        Самопроверка: результат Кэннона на последнем шаге сравнивается поэлементно с
-        наивным тройным циклом. Финального слияния между процессорами нет — каждый
-        P(i,j) уже хранит готовый C(i,j).
+        Самопроверка: результат Кэннона на последнем шаге сравнивается поэлементно с наивным
+        тройным циклом. C собрана из блоков-накопителей процессоров — финального слияния между
+        процессорами нет.
       </p>
     </div>
   )

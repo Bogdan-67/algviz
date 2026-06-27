@@ -1,47 +1,51 @@
-// Cannon's algorithm — pure, framework-free implementation.
+// Cannon's algorithm — pure, framework-free implementation (BLOCK form).
 //
-// Element-wise mapping onto an N×N grid of processors (block size = 1).
-// Processor P(i,j) accumulates C(i,j). This is correct for ANY N — it does
-// not require the processor count to be a perfect square or N to be divisible
-// by a block size.
+// The matrices are tiled into a q×q grid of b×b blocks (b = N / q). Each
+// logical processor P(I,J) holds one block of A and one block of B and
+// accumulates one block of C. The element-wise version of the algorithm is
+// simply the special case q = N (block size 1×1); q = 1 is one processor doing
+// an ordinary sequential N×N multiply.
 //
-// The UI never runs the algorithm live: it precomputes an array of immutable
-// "snapshots" (one per step) and the controls simply switch the active index.
-// That makes stepping forward/backward fully deterministic.
+// This is a SIMULATION: the algorithm is precomputed into an array of immutable
+// "snapshots" (one per step) and the UI just switches the active index, so
+// stepping forward/backward is fully deterministic. No real OS threads run.
 
 export type Matrix = number[][]
+/** A b×b sub-matrix held/produced by a processor. */
+export type Block = number[][]
 
-/** One element held by a processor, annotated with where it came from. */
-export interface CellState {
-  value: number
-  /** Origin coordinates in the ORIGINAL matrix (for stable animation identity). */
+/** One block held by a processor, annotated with its origin block coords. */
+export interface BlockCell {
+  block: Block
+  /** Origin block coordinates in the original q×q tiling (animation identity). */
   originRow: number
   originCol: number
 }
 
-/** A single product a·b added to an accumulator. */
-export interface Term {
-  /** The shared index m so that the term is A[i][m]·B[m][j]. */
-  m: number
-  a: number
-  b: number
-  product: number
+/** A single block product A_block · B_block added to an accumulator. */
+export interface BlockTerm {
+  /** The shared block index K so that the term is A[I][K]·B[K][J]. */
+  K: number
+  blockA: Block
+  blockB: Block
+  product: Block
 }
 
 export interface ProcessorState {
+  /** Block-grid coordinates (I, J), each 0..q-1. */
   i: number
   j: number
-  /** Currently held operands. */
-  a: number
-  b: number
-  /** Origin column of the held `a` (its row is always i). */
+  /** Currently held blocks. */
+  blockA: Block
+  blockB: Block
+  /** Origin block column of the held A block (its block row is always i). */
   aOriginCol: number
-  /** Origin row of the held `b` (its column is always j). */
+  /** Origin block row of the held B block (its block column is always j). */
   bOriginRow: number
-  /** Products accumulated so far, in order. */
-  terms: Term[]
-  /** Running sum = Σ terms.product. */
-  c: number
+  /** Block products accumulated so far, in order. */
+  terms: BlockTerm[]
+  /** Running block sum = Σ terms.product. */
+  c: Block
   /** Index into `terms` of the product added on this step, or -1. */
   justAdded: number
 }
@@ -51,19 +55,25 @@ export type StepKind = 'initial' | 'skew' | 'multiply'
 export interface Snapshot {
   index: number
   kind: StepKind
-  /** Multiply iteration (0..N-1); -1 for the initial/skew steps. */
+  /** Multiply iteration (0..q-1); -1 for the initial/skew steps. */
   k: number
-  /** processors[i][j] */
+  /** Grid dimension (processors per side). */
+  q: number
+  /** Block size (b = N / q). */
+  b: number
+  /** Matrix dimension. */
+  n: number
+  /** processors[I][J] */
   processors: ProcessorState[][]
-  /** Current layout of A (grid of held `a` values). */
-  matrixA: CellState[][]
-  /** Current layout of B (grid of held `b` values). */
-  matrixB: CellState[][]
-  /** Accumulated C so far; null where nothing has been added yet. */
-  matrixC: (number | null)[][]
-  /** Whether every processor has finished all N products. */
+  /** Current layout of A as a q×q grid of held blocks. */
+  matrixA: BlockCell[][]
+  /** Current layout of B as a q×q grid of held blocks. */
+  matrixB: BlockCell[][]
+  /** Accumulated C so far as q×q blocks; null where nothing added yet. */
+  matrixC: (Block | null)[][]
+  /** Whether every processor has finished all q block products. */
   complete: boolean
-  /** Whether a·b is actively being multiplied on this step. */
+  /** Whether A·B is actively being multiplied on this step. */
   multiplying: boolean
   caption: string
 }
@@ -85,6 +95,13 @@ export function cloneMatrix(m: Matrix): Matrix {
   return m.map((row) => row.slice())
 }
 
+/** All positive divisors of n (the valid grid dimensions q). */
+export function divisors(n: number): number[] {
+  const out: number[] = []
+  for (let d = 1; d <= n; d++) if (n % d === 0) out.push(d)
+  return out
+}
+
 /** Naive triple-loop multiply — the source of truth for self-checking. */
 export function naiveMultiply(A: Matrix, B: Matrix): Matrix {
   const n = A.length
@@ -99,8 +116,85 @@ export function naiveMultiply(A: Matrix, B: Matrix): Matrix {
   return C
 }
 
+/** Compare two matrices element-by-element. */
+export function matricesEqual(X: Matrix, Y: Matrix): boolean {
+  if (X.length !== Y.length) return false
+  for (let i = 0; i < X.length; i++) {
+    if (X[i].length !== Y[i].length) return false
+    for (let j = 0; j < X[i].length; j++) {
+      if (X[i][j] !== Y[i][j]) return false
+    }
+  }
+  return true
+}
+
 /**
- * Initial alignment (skew).
+ * Tile an N×N matrix into a q×q grid of b×b blocks (b = N / q).
+ * Block (I,J) holds elements M[I·b .. I·b+b-1][J·b .. J·b+b-1].
+ */
+export function splitIntoBlocks(M: Matrix, q: number): Block[][] {
+  const n = M.length
+  if (n % q !== 0) {
+    throw new Error(`splitIntoBlocks: q=${q} does not divide N=${n}`)
+  }
+  const b = n / q
+  return Array.from({ length: q }, (_, I) =>
+    Array.from({ length: q }, (_, J) =>
+      Array.from({ length: b }, (_, r) =>
+        Array.from({ length: b }, (_, c) => M[I * b + r][J * b + c]),
+      ),
+    ),
+  )
+}
+
+/** Reassemble a q×q grid of b×b blocks back into one N×N matrix. */
+export function assembleBlocks(grid: Block[][]): Matrix {
+  const q = grid.length
+  const b = grid[0][0].length
+  const n = q * b
+  const M: Matrix = Array.from({ length: n }, () => Array(n).fill(0))
+  for (let I = 0; I < q; I++) {
+    for (let J = 0; J < q; J++) {
+      const blk = grid[I][J]
+      for (let r = 0; r < b; r++) {
+        for (let c = 0; c < b; c++) M[I * b + r][J * b + c] = blk[r][c]
+      }
+    }
+  }
+  return M
+}
+
+/** b×b zero block. */
+export function zeroBlock(b: number): Block {
+  return Array.from({ length: b }, () => Array(b).fill(0))
+}
+
+/** Element-wise block addition (immutable). */
+export function addBlocks(X: Block, Y: Block): Block {
+  return X.map((row, i) => row.map((v, j) => v + Y[i][j]))
+}
+
+/** Ordinary b×b matrix multiply of two blocks. */
+export function blockMultiply(A: Block, B: Block): Block {
+  const b = A.length
+  const C: Block = zeroBlock(b)
+  for (let i = 0; i < b; i++) {
+    for (let j = 0; j < b; j++) {
+      let sum = 0
+      for (let k = 0; k < b; k++) sum += A[i][k] * B[k][j]
+      C[i][j] = sum
+    }
+  }
+  return C
+}
+
+/** Returns a new accumulator block = acc + A·B. */
+export function blockMultiplyAccumulate(acc: Block, A: Block, B: Block): Block {
+  return addBlocks(acc, blockMultiply(A, B))
+}
+
+/**
+ * Element-level skew (kept for the q = N case and conceptual reference):
  *  - A: row i shifted cyclically left by i  → newA[i][j] = A[i][(j + i) % n]
  *  - B: col j shifted cyclically up   by j  → newB[i][j] = B[(i + j) % n][j]
  */
@@ -117,155 +211,161 @@ export function skew(A: Matrix, B: Matrix): { A: Matrix; B: Matrix } {
   return { A: sA, B: sB }
 }
 
-/** Compare two matrices element-by-element. */
-export function matricesEqual(X: Matrix, Y: Matrix): boolean {
-  if (X.length !== Y.length) return false
-  for (let i = 0; i < X.length; i++) {
-    if (X[i].length !== Y[i].length) return false
-    for (let j = 0; j < X[i].length; j++) {
-      if (X[i][j] !== Y[i][j]) return false
-    }
-  }
-  return true
-}
-
 /**
- * Build all snapshots for the animation:
- *  - index 0:        initial layout (processors hold A[i][j], B[i][j], no products)
- *  - index 1:        skew / alignment (no products yet)
- *  - index 2..N+1:   N multiply-and-shift steps (k = 0..N-1)
+ * Build all snapshots for the block-form animation.
  *
- * On multiply step k, P(i,j) multiplies the held operands
- *   a = A[i][(i+j+k) % N] and b = B[(i+j+k) % N][j]
- * so that over k = 0..N-1 the shared index m = (i+j+k) % N covers all of
- * 0..N-1 and Σ A[i][m]·B[m][j] = C[i][j].
+ * @param A,B  N×N matrices.
+ * @param q    grid dimension (processors per side); must divide N.
+ *             Defaults to N (the element-wise mode, block size 1×1).
+ *
+ * Snapshots:
+ *  - index 0:        initial layout (processors hold block A[I][J], B[I][J])
+ *  - index 1:        block skew / alignment (no products yet)
+ *  - index 2..q+1:   q multiply-and-shift steps (k = 0..q-1)
+ *
+ * On multiply step k, P(I,J) multiplies the held blocks
+ *   A[I][(I+J+k) % q] and B[(I+J+k) % q][J]
+ * so that over k = 0..q-1 the shared block index K = (I+J+k) % q covers all of
+ * 0..q-1 and Σ_K A[I][K]·B[K][J] = C[I][J]. The number of steps is q, NOT N.
  */
-export function buildCannonSnapshots(A: Matrix, B: Matrix): Snapshot[] {
+export function buildCannonSnapshots(A: Matrix, B: Matrix, q?: number): Snapshot[] {
   const n = A.length
-  const snapshots: Snapshot[] = []
+  const grid = q ?? n
+  if (grid < 1 || n % grid !== 0) {
+    throw new Error(`buildCannonSnapshots: q=${grid} must be a positive divisor of N=${n}`)
+  }
+  const b = n / grid
 
-  // --- helpers that build per-step structures from the ORIGINAL matrices ---
+  const ablocks = splitIntoBlocks(A, grid)
+  const bblocks = splitIntoBlocks(B, grid)
 
-  // The "configuration shift" s controls which element each processor holds:
-  // held a = A[i][(i+j+s) % n], held b = B[(i+j+s) % n][j].
-  // s = 0 for both skew and multiply k = 0; s = k for multiply step k.
-  const heldACol = (i: number, j: number, s: number) => mod(i + j + s, n)
-  const heldBRow = (i: number, j: number, s: number) => mod(i + j + s, n)
+  // held A block: A[I][(I+J+s) % q]; held B block: B[(I+J+s) % q][J].
+  const heldACol = (I: number, J: number, s: number) => mod(I + J + s, grid)
+  const heldBRow = (I: number, J: number, s: number) => mod(I + J + s, grid)
 
-  const buildMatrixA = (s: number, skewed: boolean): CellState[][] =>
-    Array.from({ length: n }, (_, i) =>
-      Array.from({ length: n }, (_, j) => {
-        const col = skewed ? heldACol(i, j, s) : j
-        return { value: A[i][col], originRow: i, originCol: col }
-      }),
-    )
-
-  const buildMatrixB = (s: number, skewed: boolean): CellState[][] =>
-    Array.from({ length: n }, (_, i) =>
-      Array.from({ length: n }, (_, j) => {
-        const row = skewed ? heldBRow(i, j, s) : i
-        return { value: B[row][j], originRow: row, originCol: j }
-      }),
-    )
-
-  // Accumulate the products for every processor up to and including step k.
-  // termsByProcessor[i][j] is the ordered list of products through step k.
-  const termsByProcessor: Term[][][] = Array.from({ length: n }, () =>
-    Array.from({ length: n }, () => [] as Term[]),
+  // Accumulated block products per processor, growing as steps progress.
+  const termsByProc: BlockTerm[][][] = Array.from({ length: grid }, () =>
+    Array.from({ length: grid }, () => [] as BlockTerm[]),
   )
 
-  const makeProcessors = (
-    s: number,
-    skewed: boolean,
-    justAdded: number,
-  ): ProcessorState[][] =>
-    Array.from({ length: n }, (_, i) =>
-      Array.from({ length: n }, (_, j) => {
-        const aCol = skewed ? heldACol(i, j, s) : j
-        const bRow = skewed ? heldBRow(i, j, s) : i
-        const terms = termsByProcessor[i][j]
-        const c = terms.reduce((acc, t) => acc + t.product, 0)
+  const accOf = (I: number, J: number): Block =>
+    termsByProc[I][J].reduce((acc, t) => addBlocks(acc, t.product), zeroBlock(b))
+
+  const makeProcessors = (s: number, skewed: boolean, justAdded: number): ProcessorState[][] =>
+    Array.from({ length: grid }, (_, I) =>
+      Array.from({ length: grid }, (_, J) => {
+        const aCol = skewed ? heldACol(I, J, s) : J
+        const bRow = skewed ? heldBRow(I, J, s) : I
+        const terms = termsByProc[I][J]
         return {
-          i,
-          j,
-          a: A[i][aCol],
-          b: B[bRow][j],
+          i: I,
+          j: J,
+          blockA: ablocks[I][aCol],
+          blockB: bblocks[bRow][J],
           aOriginCol: aCol,
           bOriginRow: bRow,
-          terms: terms.map((t) => ({ ...t })),
-          c,
+          terms: terms.slice(),
+          c: accOf(I, J),
           justAdded: terms.length > 0 ? justAdded : -1,
         }
       }),
     )
 
-  const buildMatrixC = (): (number | null)[][] =>
-    Array.from({ length: n }, (_, i) =>
-      Array.from({ length: n }, (_, j) => {
-        const terms = termsByProcessor[i][j]
-        if (terms.length === 0) return null
-        return terms.reduce((acc, t) => acc + t.product, 0)
+  const buildMatrixA = (s: number, skewed: boolean): BlockCell[][] =>
+    Array.from({ length: grid }, (_, I) =>
+      Array.from({ length: grid }, (_, J) => {
+        const col = skewed ? heldACol(I, J, s) : J
+        return { block: ablocks[I][col], originRow: I, originCol: col }
       }),
     )
 
-  // --- index 0: initial layout ---
+  const buildMatrixB = (s: number, skewed: boolean): BlockCell[][] =>
+    Array.from({ length: grid }, (_, I) =>
+      Array.from({ length: grid }, (_, J) => {
+        const row = skewed ? heldBRow(I, J, s) : I
+        return { block: bblocks[row][J], originRow: row, originCol: J }
+      }),
+    )
+
+  const buildMatrixC = (): (Block | null)[][] =>
+    Array.from({ length: grid }, (_, I) =>
+      Array.from({ length: grid }, (_, J) =>
+        termsByProc[I][J].length === 0 ? null : accOf(I, J),
+      ),
+    )
+
+  const dims = `Матрица ${n}×${n}, сетка ${grid}×${grid} процессоров, блок ${b}×${b}.`
+  const snapshots: Snapshot[] = []
+
+  // index 0: initial layout
   snapshots.push({
     index: 0,
     kind: 'initial',
     k: -1,
+    q: grid,
+    b,
+    n,
     processors: makeProcessors(0, false, -1),
     matrixA: buildMatrixA(0, false),
     matrixB: buildMatrixB(0, false),
     matrixC: buildMatrixC(),
     complete: false,
     multiplying: false,
-    caption:
-      'Исходная раскладка. Каждый процессор P(i,j) держит свои A(i,j) и B(i,j); накопители пусты.',
+    caption: `Исходная раскладка. ${dims} Каждый процессор держит свои блоки A и B; накопители пусты.`,
   })
 
-  // --- index 1: skew / alignment ---
+  // index 1: block skew / alignment
   snapshots.push({
     index: 1,
     kind: 'skew',
     k: -1,
+    q: grid,
+    b,
+    n,
     processors: makeProcessors(0, true, -1),
     matrixA: buildMatrixA(0, true),
     matrixB: buildMatrixB(0, true),
     matrixC: buildMatrixC(),
     complete: false,
     multiplying: false,
-    caption:
-      'Выравнивание: строка i матрицы A сдвинута влево на i, столбец j матрицы B — вверх на j.',
+    caption: `Выравнивание блоков: строка блоков I матрицы A сдвинута влево на I, столбец блоков J матрицы B — вверх на J.`,
   })
 
-  // --- indices 2..N+1: multiply-and-shift, k = 0..N-1 ---
-  for (let k = 0; k < n; k++) {
-    // Each processor multiplies its currently held a·b and accumulates it.
-    for (let i = 0; i < n; i++) {
-      for (let j = 0; j < n; j++) {
-        const m = heldACol(i, j, k) // == heldBRow(i, j, k)
-        const a = A[i][m]
-        const b = B[m][j]
-        termsByProcessor[i][j].push({ m, a, b, product: a * b })
+  // indices 2..q+1: multiply-and-shift, k = 0..q-1
+  for (let k = 0; k < grid; k++) {
+    for (let I = 0; I < grid; I++) {
+      for (let J = 0; J < grid; J++) {
+        const K = heldACol(I, J, k) // == heldBRow(I, J, k)
+        const blockA = ablocks[I][K]
+        const blockB = bblocks[K][J]
+        termsByProc[I][J].push({ K, blockA, blockB, product: blockMultiply(blockA, blockB) })
       }
     }
-    const justAdded = k // index of the freshly added term
-    const complete = k === n - 1
+    const complete = k === grid - 1
     snapshots.push({
       index: k + 2,
       kind: 'multiply',
       k,
-      processors: makeProcessors(k, true, justAdded),
+      q: grid,
+      b,
+      n,
+      processors: makeProcessors(k, true, k),
       matrixA: buildMatrixA(k, true),
       matrixB: buildMatrixB(k, true),
       matrixC: buildMatrixC(),
       complete,
       multiplying: true,
       caption: complete
-        ? `Шаг умножения ${k + 1} из ${n}: последнее C(i,j) += a·b. Матрица C готова — слияние между процессорами не требуется.`
-        : `Шаг умножения ${k + 1} из ${n}: все процессоры делают C(i,j) += a·b, затем A сдвигается влево, B — вверх (по тору).`,
+        ? `Шаг умножения ${k + 1} из ${grid}: последнее C(I,J) += A·B (умножение блоков ${b}×${b}). Матрица C собрана из блоков — слияния между процессорами нет.`
+        : `Шаг умножения ${k + 1} из ${grid}: каждый процессор делает C(I,J) += A·B (блоки ${b}×${b}), затем блоки A сдвигаются влево, B — вверх (по тору).`,
     })
   }
 
   return snapshots
+}
+
+/** Final assembled C (N×N) from a snapshot array — convenience for checks/tests. */
+export function finalC(snapshots: Snapshot[]): Matrix {
+  const last = snapshots[snapshots.length - 1]
+  return assembleBlocks(last.processors.map((row) => row.map((p) => p.c)))
 }
