@@ -3,6 +3,7 @@ import { TabNav, type TabId } from './components/TabNav'
 import { CannonPage } from './pages/CannonPage'
 import { JoinPage } from './pages/JoinPage'
 import { TopologyPage } from './pages/TopologyPage'
+import { SortPage } from './pages/SortPage'
 
 export default function App() {
   const [tab, setTab] = useState<TabId>('cannon')
@@ -26,6 +27,7 @@ export default function App() {
         {tab === 'cannon' && <CannonPage />}
         {tab === 'join' && <JoinPage />}
         {tab === 'topology' && <TopologyPage onNavigateCannon={() => setTab('cannon')} />}
+        {tab === 'sort' && <SortPage />}
       </main>
     </div>
   )
