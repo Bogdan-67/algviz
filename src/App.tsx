@@ -6,6 +6,7 @@ import { TopologyPage } from './pages/TopologyPage'
 import { SortPage } from './pages/SortPage'
 import { SyncPage } from './pages/SyncPage'
 import { SpeedupPage } from './pages/SpeedupPage'
+import { MemoryArchPage } from './pages/MemoryArchPage'
 
 export default function App() {
   const [tab, setTab] = useState<TabId>('cannon')
@@ -32,6 +33,7 @@ export default function App() {
         {tab === 'sort' && <SortPage />}
         {tab === 'sync' && <SyncPage />}
         {tab === 'speedup' && <SpeedupPage />}
+        {tab === 'memarch' && <MemoryArchPage />}
       </main>
     </div>
   )

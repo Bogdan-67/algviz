@@ -1,4 +1,4 @@
-export type TabId = 'cannon' | 'join' | 'topology' | 'sort' | 'sync' | 'speedup'
+export type TabId = 'cannon' | 'join' | 'topology' | 'sort' | 'sync' | 'speedup' | 'memarch'
 
 interface TabNavProps {
   active: TabId
@@ -14,6 +14,7 @@ const TABS: Array<{ id: TabId; label: string; hint: string }> = [
   { id: 'sort', label: 'Параллельная сортировка', hint: 'сети сравнений' },
   { id: 'sync', label: 'Синхронизация', hint: 'потоки и ресурсы' },
   { id: 'speedup', label: 'Ускорение', hint: 'Амдал и Густафсон' },
+  { id: 'memarch', label: 'Память: UMA/NUMA', hint: 'SMP и NUMA' },
 ]
 
 export function TabNav({ active, onChange, theme, onThemeToggle }: TabNavProps) {
