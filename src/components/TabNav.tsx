@@ -1,4 +1,4 @@
-export type TabId = 'cannon' | 'join'
+export type TabId = 'cannon' | 'join' | 'topology'
 
 interface TabNavProps {
   active: TabId
@@ -10,6 +10,7 @@ interface TabNavProps {
 const TABS: Array<{ id: TabId; label: string; hint: string }> = [
   { id: 'cannon', label: 'Кэннон', hint: 'умножение матриц' },
   { id: 'join', label: 'Параллельный JOIN', hint: 'соединение шардов' },
+  { id: 'topology', label: 'Топологии', hint: 'сети межсоединений' },
 ]
 
 export function TabNav({ active, onChange, theme, onThemeToggle }: TabNavProps) {

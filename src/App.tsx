@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { TabNav, type TabId } from './components/TabNav'
 import { CannonPage } from './pages/CannonPage'
 import { JoinPage } from './pages/JoinPage'
+import { TopologyPage } from './pages/TopologyPage'
 
 export default function App() {
   const [tab, setTab] = useState<TabId>('cannon')
@@ -21,7 +22,11 @@ export default function App() {
         theme={theme}
         onThemeToggle={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
       />
-      <main>{tab === 'cannon' ? <CannonPage /> : <JoinPage />}</main>
+      <main>
+        {tab === 'cannon' && <CannonPage />}
+        {tab === 'join' && <JoinPage />}
+        {tab === 'topology' && <TopologyPage onNavigateCannon={() => setTab('cannon')} />}
+      </main>
     </div>
   )
 }
