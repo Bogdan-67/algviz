@@ -18,8 +18,6 @@ interface ControlsProps {
   rangeMax: number
   onRangeChange: (min: number, max: number) => void
   onRandom: () => void
-  theme: 'dark' | 'light'
-  onThemeToggle: () => void
 }
 
 const btn =
@@ -46,8 +44,6 @@ export function Controls({
   rangeMax,
   onRangeChange,
   onRandom,
-  theme,
-  onThemeToggle,
 }: ControlsProps) {
   return (
     <div className="flex flex-col gap-4 rounded-xl border border-slate-200 bg-white/70 p-4 dark:border-slate-700 dark:bg-slate-800/50">
@@ -129,9 +125,6 @@ export function Controls({
             className="w-16 rounded-md border border-slate-300 bg-white px-2 py-1 font-mono dark:border-slate-600 dark:bg-slate-800"
           />
         </label>
-        <button className={`${btn} ml-auto`} onClick={onThemeToggle} aria-label="Переключить тему">
-          {theme === 'dark' ? '☀ Светлая' : '🌙 Тёмная'}
-        </button>
       </div>
     </div>
   )
