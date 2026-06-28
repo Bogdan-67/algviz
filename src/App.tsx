@@ -4,6 +4,7 @@ import { CannonPage } from './pages/CannonPage'
 import { JoinPage } from './pages/JoinPage'
 import { TopologyPage } from './pages/TopologyPage'
 import { SortPage } from './pages/SortPage'
+import { SyncPage } from './pages/SyncPage'
 
 export default function App() {
   const [tab, setTab] = useState<TabId>('cannon')
@@ -28,6 +29,7 @@ export default function App() {
         {tab === 'join' && <JoinPage />}
         {tab === 'topology' && <TopologyPage onNavigateCannon={() => setTab('cannon')} />}
         {tab === 'sort' && <SortPage />}
+        {tab === 'sync' && <SyncPage />}
       </main>
     </div>
   )
